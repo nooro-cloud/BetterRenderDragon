@@ -21,6 +21,19 @@
 
 void initMCHooks();
 
+static void reloadKeyThread() {
+  bool wasDown = false;
+  while (true) {
+    bool isDown = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
+    if (isDown && !wasDown) {
+      brd::Options::reloadShaders = true;
+      Logger::log("F8 pressed - reload requested");
+    }
+    wasDown = isDown;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+}
+
 void init() {
   std::filesystem::remove(Global::GetBRDRaomingPath() + "\\logs.txt");
   Logger::log("BetterRenderDragon %s", BetterRDVersion);
@@ -28,10 +41,9 @@ void init() {
   brd::Options::load();
 
   MH_Initialize();
-  // initMCPatches();
   initMCHooks();
-  std::this_thread::sleep_for(std::chrono::seconds(1));
-  // initImGuiHooks();
+  Logger::log("F8 = reload shaders");
+  std::thread(reloadKeyThread).detach();
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
