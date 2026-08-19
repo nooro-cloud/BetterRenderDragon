@@ -34,8 +34,9 @@ DeclareHook(readFile, std::string*, void *This, void *retstr,
   std::string *result = original(This, retstr, path);
   if (brd::Options::materialBinLoaderEnabled && brd::Options::redirectShaders &&
       resourcePackManager && ResourcePackManager_load) {
-    const std::string p = path->getUtf8CString();
-    if (p.size() > 13 &&
+    if (!path || path->empty() || path->size() > 4096) return result;
+    const std::string p(path->getUtf8StringView());
+    Logger::log("readFile path: %s", p.c_str());    if (p.size() > 13 &&
         p.find("data/renderer/materials/") != std::string::npos &&
         strncmp(p.c_str() + p.size() - 13, ".material.bin", 13) == 0) {
 
