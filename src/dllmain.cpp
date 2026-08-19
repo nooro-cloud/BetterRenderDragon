@@ -31,7 +31,7 @@ void init() {
   initMCPatches();
   initMCHooks();
   std::this_thread::sleep_for(std::chrono::seconds(1));
-  initImGuiHooks();
+  // initImGuiHooks();
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
