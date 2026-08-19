@@ -78,9 +78,14 @@ DeclareHook(clientInstance_Update, __int64, void *This,
   if (adrr && !resourcePackManager) {
     auto func = reinterpret_cast<func_t>(adrr);
     if (func) {
+      Logger::log("Calling getResourcePackManager at %p", (void*)adrr);
       resourcePackManager = func(This);
-      auto vptr = *reinterpret_cast<void***>(resourcePackManager);
-      ResourcePackManager_load = reinterpret_cast<PFN_ResourcePackManager_load>(vptr[3]);
+      Logger::log("resourcePackManager = %p", resourcePackManager);
+      if (resourcePackManager) {
+        auto vptr = *reinterpret_cast<void***>(resourcePackManager);
+        ResourcePackManager_load = reinterpret_cast<PFN_ResourcePackManager_load>(vptr[3]);
+        Logger::log("ResourcePackManager_load = %p", (void*)ResourcePackManager_load);
+      }
     }
   }
 
