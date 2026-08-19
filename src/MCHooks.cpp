@@ -169,7 +169,7 @@ void initMCHooks() {
              "? ? 44 0F B6 FA 48 8B F9 33 DB");
 
   TrySigHook(readFile,
-                 // Minecraft EDUCATION 26.32 (GDK)
+                 // Minecraft EDUCATION 26.32 (GDK).
              "55 56 48 83 EC ? 48 8D 6C 24 ? 48 C7 45 ? ? ? ? ? 48 89 D6 48 8D 4D ? 4C 89 C2 E8 ? ? ? ? 48 8B 55 ? 48 85 D2 74 ? 48 8B 46 ? 48 8B 08",
              // 1.26.30
              "55 41 57 41 56 56 57 53 48 81 EC ? ? ? ? 48 8D AC 24 ? ? ? ? 48 C7 85 ? ? ? ? ? ? ? ? 48 89 D6 41 0F 10 00",
