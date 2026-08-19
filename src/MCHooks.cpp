@@ -33,25 +33,26 @@ DeclareHook(readFile, std::string*, void *This, void *retstr,
             Core::PathView *path) {
   std::string *result = original(This, retstr, path);
   if (brd::Options::materialBinLoaderEnabled && brd::Options::redirectShaders &&
-      resourcePackManager) {
+      resourcePackManager && ResourcePackManager_load) {
     const std::string p = path->getUtf8CString();
-    if (p.find("data/renderer/materials/") != std::string::npos &&
+    if (p.size() > 13 &&
+        p.find("data/renderer/materials/") != std::string::npos &&
         strncmp(p.c_str() + p.size() - 13, ".material.bin", 13) == 0) {
 
       std::string binPath =
           "renderer/materials/" + p.substr(p.find_last_of('/') + 1);
+      Logger::log("readFile hit: %s", binPath.c_str());
       ResourceLocation location(binPath);
       std::string out;
-      // Logger::log("ResourcePackManager::load path=%s", binPath.c_str());
-
+      Logger::log("about to call ResourcePackManager_load");
       bool success =
           ResourcePackManager_load(resourcePackManager, location, out);
+      Logger::log("returned, success=%d size=%zu", (int)success, out.size());
 
       if (success && !out.empty()) {
         result->assign(out);
         Logger::log("Loaded %s", binPath.c_str());
       }
-      // Logger::log("ResourcePackManager::load ret=%d", success);
     }
   }
   return result;
