@@ -40,7 +40,7 @@ DeclareHook(readFile, std::string*, void *This, void *retstr,
       const std::string p = *ps;
       Logger::log("readFile path: %s", p.c_str());
       if (p.size() > 13 &&
-        p.find("data/renderer/materials/") != std::string::npos &&
+        p.find("renderer/materials/") != std::string::npos &&
         strncmp(p.c_str() + p.size() - 13, ".material.bin", 13) == 0) {
 
       std::string binPath =
