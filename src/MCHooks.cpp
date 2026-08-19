@@ -31,35 +31,7 @@ PFN_ResourcePackManager_load ResourcePackManager_load;
 
 DeclareHook(readFile, std::string*, void *This, void *retstr,
             Core::PathView *path) {
-  std::string *result = original(This, retstr, path);
-  if (brd::Options::materialBinLoaderEnabled && brd::Options::redirectShaders &&
-      resourcePackManager && ResourcePackManager_load) {
-           if (!path) return result;
-      const std::string *ps = reinterpret_cast<const std::string *>(path);
-      if (ps->size() == 0 || ps->size() > 4096) return result;
-      const std::string p = *ps;
-      Logger::log("readFile path: %s", p.c_str());
-      if (p.size() > 13 &&
-        p.find("renderer/materials/") != std::string::npos &&
-        strncmp(p.c_str() + p.size() - 13, ".material.bin", 13) == 0) {
-
-      std::string binPath =
-          "renderer/materials/" + p.substr(p.find_last_of('/') + 1);
-      Logger::log("readFile hit: %s", binPath.c_str());
-      ResourceLocation location(binPath);
-      std::string out;
-      Logger::log("about to call ResourcePackManager_load");
-      bool success =
-          ResourcePackManager_load(resourcePackManager, location, out);
-      Logger::log("returned, success=%d size=%zu", (int)success, out.size());
-
-      if (success && !out.empty()) {
-        result->assign(out);
-        Logger::log("Loaded %s", binPath.c_str());
-      }
-    }
-  }
-  return result;
+  return original(This, retstr, path);
 }
 
 DeclareHook(clientInstance_Update, __int64, void *This,
