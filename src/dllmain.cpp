@@ -28,7 +28,7 @@ void init() {
   brd::Options::load();
 
   MH_Initialize();
-  initMCPatches();
+  // initMCPatches();
   initMCHooks();
   std::this_thread::sleep_for(std::chrono::seconds(1));
   // initImGuiHooks();
