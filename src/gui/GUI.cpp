@@ -95,7 +95,6 @@ void SetupImGuiStyle() {
 	style.Colors[ImGuiCol_NavWindowingHighlight] = ImVec4(1.0f, 1.0f, 1.0f, 0.7f);
 	style.Colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.8f, 0.8f, 0.8f, 0.2f);
 	style.Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
-	style.Colors[ImGuiCol_CheckboxSelectedBg] = ImVec4(0.13725491f, 0.17254902f, 0.22745098f, 0.54f);
 }
 
 void initializeImGui(bool isDx12) {
