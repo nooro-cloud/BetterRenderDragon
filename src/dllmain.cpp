@@ -62,8 +62,8 @@ static void copyShaderFromPacks() {
     return;
   }
 
-  std::string cfg =
-      readTextFile(mojang / "minecraftpe" / "global_resource_packs.json");
+   std::string cfg =
+      readTextFile(fs::path(Global::GetBRDRaomingPath()) / "shader.txt");
   std::string wantUuid = jsonStrAfter(cfg, "pack_id", 0);
   std::string wantSub;
   if (!wantUuid.empty()) {
@@ -83,8 +83,9 @@ static void copyShaderFromPacks() {
     if (!e.is_directory()) continue;
     if (!fs::exists(e.path() / "renderer" / "materials")) continue;
     std::string mf = readTextFile(e.path() / "manifest.json");
-    bool match = !wantUuid.empty() && mf.find(wantUuid) != std::string::npos;
-    Logger::log("pack: %s %s", e.path().filename().string().c_str(),
+    bool match = !wantUuid.empty() &&
+                 e.path().filename().string().find(wantUuid) !=
+                     std::string::npos;    Logger::log("pack: %s %s", e.path().filename().string().c_str(),
                 match ? "<== ACTIVE" : "");
     if (match) best = e.path();
   }
