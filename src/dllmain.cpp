@@ -9,6 +9,12 @@
 #include <fcntl.h>
 #include <io.h>
 #include <thread>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <atomic>
 
 #include "Global.h"
 #include "imgui.h"
@@ -18,8 +24,206 @@
 #include "Version.h"
 #include "api/Logger.h"
 #include "api/memory/HookAPI.hpp"
+#include "mc/deps/core/resource/ResourceLocation.h"
 
 void initMCHooks();
+
+// provided by MCHooks.cpp
+extern void *resourcePackManager;
+typedef bool (*PFN_ResourcePackManager_load)(void *This,
+                                             const ResourceLocation &location,
+                                             std::string &resourceStream);
+extern PFN_ResourcePackManager_load ResourcePackManager_load;
+
+static std::atomic_bool gApplying{false};
+
+static const char *kMaterials[] = {
+    "RenderChunk", "Actor",     "Sky",       "Clouds",
+    "Stars",       "SunMoon",   "Weather",   "EndSky",
+    "EndPortal",   "Particle",  "LegacyCubemap"};
+
+static std::filesystem::path materialsDir() {
+  namespace fs = std::filesystem;
+  char buf[MAX_PATH];
+  GetModuleFileNameA(NULL, buf, MAX_PATH);
+  return fs::path(buf).parent_path() / "data" / "renderer" / "materials";
+}
+
+static std::filesystem::path backupDir() {
+  return std::filesystem::path(Global::GetBRDRaomingPath()) / "vanilla_backup";
+}
+
+// Save a pristine copy of the game's own materials, once.
+static void ensureBackup() {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  fs::path src = materialsDir();
+  fs::path bak = backupDir();
+
+  if (fs::exists(bak)) {
+    int have = 0;
+    for (auto &f : fs::directory_iterator(bak, ec)) {
+      (void)f;
+      have++;
+    }
+    Logger::log("vanilla backup present (%d files)", have);
+    return;
+  }
+
+  fs::create_directories(bak, ec);
+  int n = 0;
+  for (auto &f : fs::directory_iterator(src, ec)) {
+    if (f.path().extension() != ".bin") continue;
+    fs::copy_file(f.path(), bak / f.path().filename(),
+                  fs::copy_options::overwrite_existing, ec);
+    if (!ec) n++;
+  }
+  Logger::log("CREATED vanilla backup: %d files -> %s", n,
+              bak.string().c_str());
+}
+
+static int restoreVanilla() {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  fs::path bak = backupDir();
+  fs::path dst = materialsDir();
+  if (!fs::exists(bak)) {
+    Logger::log("no vanilla backup to restore");
+    return 0;
+  }
+  int n = 0;
+  for (auto &f : fs::directory_iterator(bak, ec)) {
+    if (f.path().extension() != ".bin") continue;
+    fs::copy_file(f.path(), dst / f.path().filename(),
+                  fs::copy_options::overwrite_existing, ec);
+    if (!ec) n++;
+  }
+  Logger::log("restored %d vanilla materials", n);
+  return n;
+}
+
+// Pull whatever the active resource packs provide.
+// Returns how many material files were found (0 = pack has no shaders).
+static int pullFromActivePack(bool verbose) {
+  namespace fs = std::filesystem;
+
+  if (!resourcePackManager || !ResourcePackManager_load) {
+    if (verbose) Logger::log("pack manager not ready");
+    return -1;
+  }
+
+  struct Item { std::string name, bytes; };
+  std::vector<Item> got;
+
+  for (const char *name : kMaterials) {
+    std::string rel =
+        std::string("renderer/materials/") + name + ".material.bin";
+    std::string out;
+    bool ok = false;
+    try {
+      ResourceLocation location(rel);
+      ok = ResourcePackManager_load(resourcePackManager, location, out);
+    } catch (...) {
+      ok = false;
+    }
+    if (ok && !out.empty()) got.push_back({name, std::move(out)});
+  }
+
+  if (got.empty()) return 0;
+
+  // Clean slate first so leftovers from a previous shader never linger.
+  restoreVanilla();
+
+  fs::path dest = materialsDir();
+  std::error_code ec;
+  fs::create_directories(dest, ec);
+
+  int n = 0;
+  for (auto &it : got) {
+    fs::path target = dest / (it.name + ".material.bin");
+    std::ofstream f(target, std::ios::binary | std::ios::trunc);
+    if (f) {
+      f.write(it.bytes.data(), (std::streamsize)it.bytes.size());
+      f.close();
+      if (verbose)
+        Logger::log("wrote %s (%zu bytes)", it.name.c_str(), it.bytes.size());
+      n++;
+    }
+  }
+  Logger::log("applied %d materials from active packs", n);
+  return n;
+}
+
+// Manual F8: apply now, and fall back to vanilla if the pack has no shaders.
+static void applyNow() {
+  int r = pullFromActivePack(true);
+  if (r == 0) {
+    Logger::log("no shader materials in active packs -> vanilla");
+    restoreVanilla();
+  }
+  brd::Options::reloadShaders = true;
+}
+
+// Fired once the world's resource packs are mounted.
+// Retries, because early in the load the pack manager can return nothing
+// even when a shader pack IS active - we must not wrongly reset to vanilla.
+static void autoApplyOnWorldLoad() {
+  const int kTries = 6;
+  for (int i = 1; i <= kTries; i++) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+    int r = pullFromActivePack(i == 1);
+    if (r > 0) {
+      Logger::log("auto-applied shaders on world load (try %d)", i);
+      brd::Options::reloadShaders = true;
+      gApplying = false;
+      return;
+    }
+    if (r < 0) continue;  // manager not ready yet
+    Logger::log("try %d: no shader materials yet", i);
+  }
+  Logger::log("no shaders in active packs - staying vanilla");
+  brd::Options::reloadShaders = true;
+  gApplying = false;
+}
+
+static void watcherThread() {
+  bool f8Was = false, f9Was = false;
+  void *lastMgr = nullptr;   // tracks which world we last applied for
+  while (true) {
+    // --- auto-apply every time a world finishes loading ---
+    // resourcePackManager is a fresh pointer per world, and is cleared
+    // when you leave to the menu, so this re-fires for world 2, 3, ...
+    void *mgr = resourcePackManager;
+    if (mgr && ResourcePackManager_load) {
+      if (mgr != lastMgr && !gApplying.load()) {
+        lastMgr = mgr;
+        gApplying = true;
+        Logger::log("world loaded - auto applying shaders");
+        std::thread(autoApplyOnWorldLoad).detach();
+      }
+    } else {
+      // left the world: re-arm so the next world triggers again
+      lastMgr = nullptr;
+    }
+
+    // --- manual keys ---
+    bool f8 = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
+    bool f9 = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
+    if (f8 && !f8Was) {
+      Logger::log("F8 pressed");
+      applyNow();
+    }
+    if (f9 && !f9Was) {
+      Logger::log("F9 pressed - force vanilla");
+      restoreVanilla();
+      brd::Options::reloadShaders = true;
+    }
+    f8Was = f8;
+    f9Was = f9;
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+}
 
 void init() {
   std::filesystem::remove(Global::GetBRDRaomingPath() + "\\logs.txt");
@@ -28,10 +232,14 @@ void init() {
   brd::Options::load();
 
   MH_Initialize();
-  initMCPatches();
   initMCHooks();
-  std::this_thread::sleep_for(std::chrono::seconds(1));
-  initImGuiHooks();
+
+  ensureBackup();
+  // Always start from vanilla so a previous session never leaks through.
+  restoreVanilla();
+
+  Logger::log("auto-apply on world load | F8 = re-apply | F9 = vanilla");
+  std::thread(watcherThread).detach();
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
@@ -47,6 +255,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
   case DLL_THREAD_DETACH:
     break;
   case DLL_PROCESS_DETACH:
+    // Game is closing: put the vanilla files back.
+    restoreVanilla();
     break;
   }
   return TRUE;
