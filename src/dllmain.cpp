@@ -22,11 +22,10 @@
 void initMCHooks();
 static void copyShaderFromPacks() {
   namespace fs = std::filesystem;
-  const char *localApp = std::getenv("LOCALAPPDATA");
-  if (!localApp) { Logger::log("no LOCALAPPDATA"); return; }
+  const char *appData = std::getenv("APPDATA");
+  if (!appData) { Logger::log("no APPDATA"); return; }
 
-  fs::path packs = fs::path(localApp) / "Packages" /
-      "Microsoft.MinecraftEducationEdition_8wekyb3d8bbwe" / "LocalState" /
+  fs::path packs = fs::path(appData) / "Minecraft Education Edition" /
       "games" / "com.mojang" / "resource_packs";
   if (!fs::exists(packs)) {
     Logger::log("no resource_packs folder: %s", packs.string().c_str());
