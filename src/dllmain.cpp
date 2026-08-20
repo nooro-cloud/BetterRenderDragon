@@ -14,7 +14,6 @@
 #include <sstream>
 #include <string>
 #include <vector>
-#include <atomic>
 
 #include "Global.h"
 #include "imgui.h"
@@ -34,8 +33,6 @@ typedef bool (*PFN_ResourcePackManager_load)(void *This,
                                              const ResourceLocation &location,
                                              std::string &resourceStream);
 extern PFN_ResourcePackManager_load ResourcePackManager_load;
-
-static std::atomic_bool gApplying{false};
 
 static const char *kMaterials[] = {
     "RenderChunk", "Actor",     "Sky",       "Clouds",
@@ -164,46 +161,53 @@ static void applyNow() {
   brd::Options::reloadShaders = true;
 }
 
-// Fired once the world's resource packs are mounted.
-// Retries, because early in the load the pack manager can return nothing
-// even when a shader pack IS active - we must not wrongly reset to vanilla.
-static void autoApplyOnWorldLoad() {
-  const int kTries = 6;
-  for (int i = 1; i <= kTries; i++) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
-    int r = pullFromActivePack(i == 1);
-    if (r > 0) {
-      Logger::log("auto-applied shaders on world load (try %d)", i);
-      brd::Options::reloadShaders = true;
-      gApplying = false;
-      return;
+// Cheap probe: does the active pack stack currently expose ANY shader?
+// This is what actually changes when a world's packs get mounted, so it is
+// a far better trigger than watching resourcePackManager (which is set
+// during startup, long before any world exists).
+static bool packHasShaders() {
+  if (!resourcePackManager || !ResourcePackManager_load) return false;
+  for (const char *name : kMaterials) {
+    std::string rel =
+        std::string("renderer/materials/") + name + ".material.bin";
+    std::string out;
+    try {
+      ResourceLocation location(rel);
+      if (ResourcePackManager_load(resourcePackManager, location, out) &&
+          !out.empty())
+        return true;
+    } catch (...) {
     }
-    if (r < 0) continue;  // manager not ready yet
-    Logger::log("try %d: no shader materials yet", i);
   }
-  Logger::log("no shaders in active packs - staying vanilla");
-  brd::Options::reloadShaders = true;
-  gApplying = false;
+  return false;
 }
 
 static void watcherThread() {
   bool f8Was = false, f9Was = false;
-  void *lastMgr = nullptr;   // tracks which world we last applied for
+  bool applied = false;
+  int tick = 0;
+
   while (true) {
-    // --- auto-apply every time a world finishes loading ---
-    // resourcePackManager is a fresh pointer per world, and is cleared
-    // when you leave to the menu, so this re-fires for world 2, 3, ...
-    void *mgr = resourcePackManager;
-    if (mgr && ResourcePackManager_load) {
-      if (mgr != lastMgr && !gApplying.load()) {
-        lastMgr = mgr;
-        gApplying = true;
-        Logger::log("world loaded - auto applying shaders");
-        std::thread(autoApplyOnWorldLoad).detach();
+    // --- poll roughly once a second for shaders becoming available ---
+    if (++tick >= 20) {
+      tick = 0;
+      bool avail = packHasShaders();
+
+      if (avail && !applied) {
+        Logger::log("shaders detected in active packs - applying");
+        int r = pullFromActivePack(true);
+        if (r > 0) {
+          brd::Options::reloadShaders = true;
+          applied = true;
+          Logger::log("auto-applied %d materials", r);
+        }
+      } else if (!avail && applied) {
+        // packs unmounted (left the world / turned the pack off)
+        Logger::log("shaders no longer active - back to vanilla");
+        restoreVanilla();
+        brd::Options::reloadShaders = true;
+        applied = false;
       }
-    } else {
-      // left the world: re-arm so the next world triggers again
-      lastMgr = nullptr;
     }
 
     // --- manual keys ---
@@ -212,11 +216,13 @@ static void watcherThread() {
     if (f8 && !f8Was) {
       Logger::log("F8 pressed");
       applyNow();
+      applied = true;
     }
     if (f9 && !f9Was) {
       Logger::log("F9 pressed - force vanilla");
       restoreVanilla();
       brd::Options::reloadShaders = true;
+      applied = false;
     }
     f8Was = f8;
     f9Was = f9;
