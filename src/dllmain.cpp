@@ -28,6 +28,10 @@
 
 void initMCHooks();
 
+// OptionsUI.cpp
+void openOptionsUI();
+void applyPendingOptions();
+
 // provided by MCHooks.cpp
 extern void *resourcePackManager;
 typedef bool (*PFN_ResourcePackManager_load)(void *This,
@@ -163,6 +167,9 @@ static void applyNow() {
 }
 
 // Cheap probe: does the active pack stack currently expose ANY shader?
+// This is what actually changes when a world's packs get mounted, so it is
+// a far better trigger than watching resourcePackManager (which is set
+// during startup, long before any world exists).
 static bool packHasShaders() {
   if (!resourcePackManager || !ResourcePackManager_load) return false;
   for (const char *name : kMaterials) {
@@ -181,7 +188,7 @@ static bool packHasShaders() {
 }
 
 static void watcherThread() {
-  bool f8Was = false, f9Was = false;
+  bool f8Was = false, f9Was = false, f10Was = false;
   bool applied = false;
   int tick = 0;
 
@@ -212,9 +219,8 @@ static void watcherThread() {
     bool f8 = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
     bool f9 = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
     if (f8 && !f8Was) {
-      Logger::log("F8 pressed");
-      applyNow();
-      applied = true;
+      Logger::log("F8 pressed - opening options editor");
+      openOptionsUI();
     }
     if (f9 && !f9Was) {
       Logger::log("F9 pressed - force vanilla");
@@ -222,6 +228,13 @@ static void watcherThread() {
       brd::Options::reloadShaders = true;
       applied = false;
     }
+    bool f10 = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
+    if (f10 && !f10Was) {
+      Logger::log("F10 pressed - re-apply shaders");
+      applyNow();
+      applied = true;
+    }
+    f10Was = f10;
     f8Was = f8;
     f9Was = f9;
 
@@ -234,6 +247,9 @@ static void watcherThread() {
 // game's code is ready to scan. Waiting for a window is NOT enough: the
 // window exists before the code we hook is mapped in. So poll for a
 // signature we know exists and only continue once it resolves.
+//
+// Self-contained scanner (same approach as MCPatches.cpp) so this does not
+// depend on any symbol from the rest of the project.
 // ---------------------------------------------------------------
 static uintptr_t scanFor(const char *signature) {
   HMODULE mod = GetModuleHandleA("Minecraft.Windows.exe");
@@ -307,7 +323,8 @@ void init() {
   // Always start from vanilla so a previous session never leaks through.
   restoreVanilla();
 
-  Logger::log("auto-apply on world load | F8 = re-apply | F9 = vanilla");
+  Logger::log("auto-apply on world load | F8 = options editor | "
+              "F9 = vanilla | F10 = re-apply shaders");
   std::thread(watcherThread).detach();
 }
 
@@ -324,8 +341,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
   case DLL_THREAD_DETACH:
     break;
   case DLL_PROCESS_DETACH:
-    // Game is closing: put the vanilla files back.
+    // Game is closing: put the vanilla files back, then re-apply any
+    // pending option edits (Minecraft has just rewritten options.txt).
     restoreVanilla();
+    applyPendingOptions();
     break;
   }
   return TRUE;
