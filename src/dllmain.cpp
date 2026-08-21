@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <psapi.h>
 
 #include "Global.h"
 #include "imgui.h"
@@ -162,9 +163,6 @@ static void applyNow() {
 }
 
 // Cheap probe: does the active pack stack currently expose ANY shader?
-// This is what actually changes when a world's packs get mounted, so it is
-// a far better trigger than watching resourcePackManager (which is set
-// during startup, long before any world exists).
 static bool packHasShaders() {
   if (!resourcePackManager || !ResourcePackManager_load) return false;
   for (const char *name : kMaterials) {
@@ -231,33 +229,67 @@ static void watcherThread() {
   }
 }
 
-// When loaded as version.dll the DLL starts with the process, long before
-// the game is ready. Injecting at the menu skips this entirely. Waiting for
-// the main window covers both cases safely.
-static void waitForGameReady() {
-  for (int i = 0; i < 120; i++) {  // up to ~60s
-    DWORD pid = GetCurrentProcessId();
-    HWND found = nullptr;
-    EnumWindows(
-        [](HWND h, LPARAM lp) -> BOOL {
-          DWORD wpid = 0;
-          GetWindowThreadProcessId(h, &wpid);
-          if (wpid == GetCurrentProcessId() && IsWindowVisible(h)) {
-            *reinterpret_cast<HWND *>(lp) = h;
-            return FALSE;
-          }
-          return TRUE;
-        },
-        reinterpret_cast<LPARAM>(&found));
-    (void)pid;
-    if (found) {
-      Logger::log("game window up after %d ms", i * 500);
-      std::this_thread::sleep_for(std::chrono::seconds(2));
-      return;
+// ---------------------------------------------------------------
+// When loaded as version.dll we start with the process, long before the
+// game's code is ready to scan. Waiting for a window is NOT enough: the
+// window exists before the code we hook is mapped in. So poll for a
+// signature we know exists and only continue once it resolves.
+// ---------------------------------------------------------------
+static uintptr_t scanFor(const char *signature) {
+  HMODULE mod = GetModuleHandleA("Minecraft.Windows.exe");
+  if (!mod) return 0;
+
+  MODULEINFO mi{};
+  if (!GetModuleInformation(GetCurrentProcess(), mod, &mi, sizeof(mi)))
+    return 0;
+
+  std::vector<uint16_t> pat;
+  for (size_t i = 0; signature[i]; i++) {
+    if (signature[i] == ' ') continue;
+    if (signature[i] == '?') {
+      pat.push_back(0xFF00);
+      if (signature[i + 1] == '?') i++;
+    } else {
+      char b[3] = {signature[i], signature[i + 1], 0};
+      i++;
+      pat.push_back((uint16_t)strtoul(b, nullptr, 16));
+    }
+  }
+  if (pat.empty()) return 0;
+
+  uint8_t *base = (uint8_t *)mod;
+  size_t size = mi.SizeOfImage;
+  size_t n = pat.size();
+  for (size_t i = 0; i + n < size; i++) {
+    bool hit = true;
+    for (size_t j = 0; j < n; j++) {
+      if (pat[j] & 0xFF00) continue;
+      if (base[i + j] != (uint8_t)pat[j]) { hit = false; break; }
+    }
+    if (hit) return (uintptr_t)(base + i);
+  }
+  return 0;
+}
+
+static bool waitForCode() {
+  // ClientInstance::getResourcePackManager - only present once the game's
+  // own code has been mapped and is scannable.
+  const char *probe =
+      "48 8B 89 ? ? ? ? 48 8B 01 48 8B 80 ? ? ? ? 48 8B 15 ? ? ? ? 48 FF E2 "
+      "CC CC CC CC CC 48 8B 89 ? ? ? ? 48 8B 01 48 8B 80 ? ? ? ? 48 8B 15 ? "
+      "? ? ? 48 FF E2 CC CC CC CC CC 56 48 83 EC ? 48 89 D6 48 8B 89 ? ? ? ? "
+      "48 8B 01";
+
+  for (int i = 0; i < 240; i++) {  // up to ~120 s
+    if (scanFor(probe)) {
+      Logger::log("game code ready after %d ms", i * 500);
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      return true;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
   }
-  Logger::log("no game window after 60s - continuing anyway");
+  Logger::log("game code never became scannable (120s) - hooks will fail");
+  return false;
 }
 
 void init() {
@@ -266,7 +298,7 @@ void init() {
   brd::Options::init();
   brd::Options::load();
 
-  waitForGameReady();
+  waitForCode();
 
   MH_Initialize();
   initMCHooks();
