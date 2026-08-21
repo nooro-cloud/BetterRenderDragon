@@ -231,11 +231,42 @@ static void watcherThread() {
   }
 }
 
+// When loaded as version.dll the DLL starts with the process, long before
+// the game is ready. Injecting at the menu skips this entirely. Waiting for
+// the main window covers both cases safely.
+static void waitForGameReady() {
+  for (int i = 0; i < 120; i++) {  // up to ~60s
+    DWORD pid = GetCurrentProcessId();
+    HWND found = nullptr;
+    EnumWindows(
+        [](HWND h, LPARAM lp) -> BOOL {
+          DWORD wpid = 0;
+          GetWindowThreadProcessId(h, &wpid);
+          if (wpid == GetCurrentProcessId() && IsWindowVisible(h)) {
+            *reinterpret_cast<HWND *>(lp) = h;
+            return FALSE;
+          }
+          return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&found));
+    (void)pid;
+    if (found) {
+      Logger::log("game window up after %d ms", i * 500);
+      std::this_thread::sleep_for(std::chrono::seconds(2));
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  }
+  Logger::log("no game window after 60s - continuing anyway");
+}
+
 void init() {
   std::filesystem::remove(Global::GetBRDRaomingPath() + "\\logs.txt");
   Logger::log("BetterRenderDragon %s", BetterRDVersion);
   brd::Options::init();
   brd::Options::load();
+
+  waitForGameReady();
 
   MH_Initialize();
   initMCHooks();
